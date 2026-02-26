@@ -1,7 +1,11 @@
+import os
+os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "0"
+
 import streamlit as st
 from ultralytics import YOLO
-from PIL import Image
 import numpy as np
+import av
+from streamlit_webrtc import webrtc_streamer
 
 st.set_page_config(page_title="Pose Estimation — YOLO26", layout="wide")
 
@@ -42,71 +46,48 @@ max_det = st.sidebar.slider(
     help="Quante persone al massimo il modello può rilevare nell'immagine."
 )
 
-# ── Image input ───────────────────────────────────────────────────────────────
-st.sidebar.divider()
-uploaded = st.sidebar.file_uploader(
-    "Carica un'immagine (opzionale)",
-    type=["jpg", "jpeg", "png"],
-    help="Se non carichi nulla, viene usata l'immagine di esempio."
-)
-
-# ── Load model (cached) ───────────────────────────────────────────────────────
+# ── Load model (cached by name) ───────────────────────────────────────────────
 @st.cache_resource
 def load_model(name):
-    return YOLO(name)   # downloads weights automatically on first run
+    return YOLO(name)
 
-# ── Run inference ─────────────────────────────────────────────────────────────
-col_img, col_result = st.columns(2)
+model = load_model(model_size)
 
-if uploaded:
-    image = Image.open(uploaded).convert("RGB")
-else:
-    # Use a bundled sample image or download one from COCO
-    import urllib.request, os
-    sample_path = "sample_people.jpg"
-    if not os.path.exists(sample_path):
-        url = "https://ultralytics.com/images/bus.jpg"
-        urllib.request.urlretrieve(url, sample_path)
-    image = Image.open(sample_path).convert("RGB")
+# ── WebRTC callback ───────────────────────────────────────────────────────────
+def process_frame(frame):
+    img = frame.to_ndarray(format="bgr24")
+    results = model.predict(
+        source=img,
+        conf=conf,
+        iou=iou,
+        imgsz=imgsz,
+        max_det=max_det,
+        verbose=False,
+    )
+    return av.VideoFrame.from_ndarray(results[0].plot(), format="bgr24")
 
-with col_img:
-    st.subheader("Immagine originale")
-    st.image(image, use_container_width=True)
-
-with col_result:
-    st.subheader("Risultato inferenza")
-    with st.spinner(f"Eseguo inferenza con {model_size}..."):
-        model  = load_model(model_size)
-        results = model.predict(
-            source=np.array(image),
-            conf=conf,
-            iou=iou,
-            imgsz=imgsz,
-            max_det=max_det,
-            verbose=False,
-        )
-        annotated = results[0].plot()   # returns BGR numpy array
-        annotated_rgb = annotated[:, :, ::-1]  # BGR → RGB
-    st.image(annotated_rgb, use_container_width=True)
+webrtc_streamer(
+    key="pose",
+    video_frame_callback=process_frame,
+    media_stream_constraints={"video": True, "audio": False},
+)
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
 st.divider()
-n_people = len(results[0].boxes) if results[0].boxes is not None else 0
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Persone rilevate", n_people)
-c2.metric("conf",   conf)
-c3.metric("iou",    iou)
-c4.metric("imgsz",  imgsz)
-c5.metric("max_det", max_det)
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("conf",    conf)
+c2.metric("iou",     iou)
+c3.metric("imgsz",   imgsz)
+c4.metric("max_det", max_det)
 
 # ── Explanation ───────────────────────────────────────────────────────────────
 st.divider()
 st.subheader("💡 Cosa sta succedendo?")
 st.markdown(f"""
-Il modello **{model_size}** ha analizzato l'immagine a risoluzione **{imgsz}px** e trovato **{n_people} persone**.
+Il modello **{model_size}** elabora ogni frame della webcam in tempo reale.
 
-- **conf={conf}**: keypoint e persone con confidenza sotto {conf:.0%} sono stati ignorati
-- **iou={iou}**: rilevamenti che si sovrappongono più del {iou:.0%} vengono considerati duplicati e soppressi
-- **imgsz={imgsz}**: immagine ridimensionata a {imgsz}×{imgsz}px prima dell'inferenza
-- **max_det={max_det}**: anche se ci fossero più persone, il modello si ferma a {max_det}
+- **conf={conf}**: keypoint e persone con confidenza sotto {conf:.0%} vengono ignorati
+- **iou={iou}**: rilevamenti sovrapposti più del {iou:.0%} vengono considerati duplicati e soppressi
+- **imgsz={imgsz}**: ogni frame viene ridimensionato a {imgsz}×{imgsz}px prima dell'inferenza
+- **max_det={max_det}**: il modello si ferma alle {max_det} persone più confident per frame
 """)
