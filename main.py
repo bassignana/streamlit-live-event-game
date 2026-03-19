@@ -5,7 +5,7 @@ import streamlit as st
 from ultralytics import YOLO
 import numpy as np
 import av
-from streamlit_webrtc import webrtc_streamer
+from streamlit_webrtc import webrtc_streamer, RTCConfiguration
 
 st.set_page_config(page_title="Pose Estimation — YOLO26", layout="wide")
 
@@ -66,10 +66,19 @@ def process_frame(frame):
     )
     return av.VideoFrame.from_ndarray(results[0].plot(), format="bgr24")
 
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {"urls": ["stun:stun1.l.google.com:19302"]},
+        {"urls": ["stun:stun2.l.google.com:19302"]},
+    ]}
+)
+
 webrtc_streamer(
     key="pose",
     video_frame_callback=process_frame,
     media_stream_constraints={"video": True, "audio": False},
+    rtc_configuration=RTC_CONFIGURATION,
 )
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
